@@ -1,6 +1,6 @@
 MODEL:
-  PRETRAIN_CHOICE: 'imagenet'
-  PRETRAIN_PATH: '/root/.cache/torch/checkpoints/resnet50-19c8e357.pth'
+  PRETRAIN_CHOICE: ''
+  PRETRAIN_PATH: 'checkpoints/resnet50-19c8e357.pth'
   METRIC_LOSS_TYPE: 'triplet'
   IF_LABELSMOOTH: 'off'
   IF_WITH_CENTER: 'no'
@@ -47,6 +47,6 @@ TEST:
   NECK_FEAT: 'after'
   FEAT_NORM: 'yes'
 
-OUTPUT_DIR: '/data/model/0420_4/'
+OUTPUT_DIR: 'out/model/0420_4/'
 
 

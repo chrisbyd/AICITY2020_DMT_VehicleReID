@@ -7,7 +7,7 @@ from yacs.config import CfgNode as CN
 # corresponding name will be post-fixed by a _TRAIN for a training parameter,
 # or _TEST for a test-specific parameter.
 # For example, the number of images during training will be
-# IMAGES_PER_BATCH_TRAIN, while the number of images for testing will be
+# IMAGES_PER_BATCH_TRAI   N, while the number of images for testing will be
 # IMAGES_PER_BATCH_TEST
 
 # -----------------------------------------------------------------------------
@@ -76,7 +76,7 @@ _C.DATASETS = CN()
 # List of the dataset names for training, as present in paths_catalog.py
 _C.DATASETS.NAMES = ('market1501')
 # Root directory where datasets should be used (and downloaded if not found)
-_C.DATASETS.ROOT_DIR = ('../data')
+_C.DATASETS.ROOT_DIR = ('data')
 _C.DATASETS.PLUS_NUM_ID = 100
 _C.DATASETS.QUERY_MINING = False
 # -----------------------------------------------------------------------------
