@@ -1,6 +1,7 @@
 import glob
 import re
 import os.path as osp
+import xml.etree.ElementTree as ET
 
 from .bases import BaseImageDataset
 
@@ -23,16 +24,22 @@ class VeRi(BaseImageDataset):
 
     def __init__(self, root='data', verbose=True, **kwargs):
         super(VeRi, self).__init__()
+        self.root_dir = root
         self.dataset_dir = osp.join(root, self.dataset_dir)
         self.train_dir = osp.join(self.dataset_dir, 'image_train')
         self.query_dir = osp.join(self.dataset_dir, 'image_query')
         self.gallery_dir = osp.join(self.dataset_dir, 'image_test')
+        self.train_type_dir = osp.join(self.root_dir, self.dataset_dir, "train_label.xml")
+        self.train_type_dict = dict()
+        self.train_color_dict = dict()
 
         self._check_before_run()
 
         train = self._process_dir(self.train_dir, relabel=True)
         query = self._process_dir(self.query_dir, relabel=False)
         gallery = self._process_dir(self.gallery_dir, relabel=False)
+
+        self._get_color_type_index()
 
         if verbose:
             print("=> VeRi-776 loaded")
@@ -56,6 +63,21 @@ class VeRi(BaseImageDataset):
             raise RuntimeError("'{}' is not available".format(self.query_dir))
         if not osp.exists(self.gallery_dir):
             raise RuntimeError("'{}' is not available".format(self.gallery_dir))
+        if not osp.exists(self.train_type_dir):
+            raise RuntimeError("'{}' is not available".format(self.train_type_dir))
+
+
+    def _get_color_type_index(self):
+        parser = ET.XMLParser(encoding="utf-8")
+        root = ET.parse(self.train_type_dir, parser=parser).getroot()
+        for tag in root.findall("Items/Item"):
+            imageName = tag.get("imageName")
+            color = tag.get("colorID")
+            car_type = tag.get("typeID")
+            self.train_type_dict[imageName] = car_type
+            self.train_color_dict[imageName] = color
+
+
 
     def _process_dir(self, dir_path, relabel=False):
         img_paths = glob.glob(osp.join(dir_path, '*.jpg'))
@@ -76,7 +98,12 @@ class VeRi(BaseImageDataset):
             assert 1 <= camid <= 20
             camid -= 1  # index starts from 0
             if relabel: pid = pid2label[pid]
-            dataset.append((img_path, pid, camid,1))
+            image_name = img_path.split("/")[-1]
+            if image_name in self.train_color_dict and image_name in self.train_type_dir:
+                dataset.append((img_path, pid, camid, (self.train_type_dict[image_name], self.train_color_dict[image_name])))
+            else:
+                dataset.append(
+                    (img_path, pid, camid, None))
 
         return dataset
 
