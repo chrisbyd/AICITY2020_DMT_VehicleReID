@@ -23,9 +23,12 @@ def train_collate_fn(batch):
     """
     # collate_fn这个函数的输入就是一个list，list的长度是一个batch size，list中的每个元素都是__getitem__得到的结果
     """
-    imgs, pids, _, _,_ = zip(*batch)
+    imgs, pids, camIDs, trackID, _ = zip(*batch)
     pids = torch.tensor(pids, dtype=torch.int64)
-    return torch.stack(imgs, dim=0), pids
+    camIDs = torch.tensor(camIDs, dtype=torch.int64)
+    if len(trackID) >0 and trackID[0] is not None:
+        return torch.stack(imgs, dim=0), pids, camIDs, torch.tensor(trackID)
+    return torch.stack(imgs, dim=0), pids, camIDs, None
 
 def val_collate_fn(batch):##### revised by luo
     imgs, pids, camids, trackids, img_paths = zip(*batch)

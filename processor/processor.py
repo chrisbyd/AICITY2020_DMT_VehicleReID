@@ -41,6 +41,7 @@ def do_train(cfg,
     model.base._freeze_stages()
     logger.info('Freezing the stages number:{}'.format(cfg.MODEL.FROZEN))
     # train
+    l1loss = torch.nn.L1Loss()
     for epoch in range(1, epochs + 1):
         start_time = time.time()
         loss_meter.reset()
@@ -48,16 +49,23 @@ def do_train(cfg,
         evaluator.reset()
         scheduler.step()
         model.train()
-        for n_iter, (img, vid) in enumerate(train_loader):
+        for n_iter, (img, vid, camid, trackid) in enumerate(train_loader):
+
             optimizer.zero_grad()
             optimizer_center.zero_grad()
             img = img.to(device)
             target = vid.to(device)
-
-            score, feat = model(img, target)
+            camid = camid.to(device)
+            trackid = trackid.to(device)
+            typeID = trackid[:, 0]
+            colorID = trackid[:, 1]
+            score, feat, proj_feature_map, bg_feature_map, reconst_img = model(img, target, dis=True)
             loss = loss_fn(score, feat, target)
+            reconstr_loss = l1loss(reconst_img, img)
 
-            loss.backward()
+            # TODO step
+            loss.backward(retain_graph=True)
+            reconstr_loss.backward()
             optimizer.step()
             if 'center' in cfg.MODEL.METRIC_LOSS_TYPE:
                 for param in center_criterion.parameters():
