@@ -264,13 +264,13 @@ class Backbone(nn.Module):
             self.classifier.apply(weights_init_classifier)
 
         # disentangle branch
-        self.proj_layer = nn.Sequential(nn.Conv2d(self.in_planes, self.in_planes, kernel_size=5, stride=2), nn.ReLU(), nn.Conv2d(self.in_planes,self.in_planes, kernel_size=3, stride=2), nn.Tanh())
+        self.proj_layer = nn.Sequential(nn.Conv2d(self.in_planes, self.in_planes, kernel_size=5, stride=2), nn.ReLU(), nn.BatchNorm2d(self.in_planes), nn.Conv2d(self.in_planes,self.in_planes, kernel_size=3, stride=2), nn.Tanh())
         self.proj_layer.apply(weights_init_kaiming)
 
-        self.feature_layer = nn.Sequential(nn.Conv2d(self.in_planes, self.in_planes, kernel_size=3, stride=1, padding=1, padding_mode="reflect"), nn.ReLU(), nn.Conv2d(self.in_planes, self.in_planes, kernel_size=3, stride=1, padding=1))
+        self.feature_layer = nn.Sequential(nn.Conv2d(self.in_planes, self.in_planes, kernel_size=3, stride=1, padding=1, padding_mode="reflect"), nn.ReLU(), nn.BatchNorm2d(self.in_planes), nn.Conv2d(self.in_planes, self.in_planes, kernel_size=3, stride=1, padding=1))
         self.feature_layer.apply(weights_init_kaiming)
 
-        self.bg_layer = nn.Sequential(nn.Conv2d(self.in_planes, self.in_planes//16, kernel_size=3, stride=1, padding=1, padding_mode="reflect"), nn.ReLU(), nn.Conv2d(self.in_planes//16, bg_dim, kernel_size=3, stride=1, padding=1))
+        self.bg_layer = nn.Sequential(nn.Conv2d(self.in_planes, self.in_planes//16, kernel_size=3, stride=1, padding=1, padding_mode="reflect"), nn.ReLU(), nn.BatchNorm2d(self.in_planes//16), nn.Conv2d(self.in_planes//16, bg_dim, kernel_size=3, stride=1, padding=1))
 
         self.bottleneck = nn.BatchNorm1d(self.in_planes)
         self.bottleneck.bias.requires_grad_(False)
@@ -286,7 +286,7 @@ class Backbone(nn.Module):
 
         bg_feature_map = self.bg_layer(x)
 
-        global_feat = nn.functional.avg_pool2d(x, x.shape[2:4])
+        global_feat = nn.functional.avg_pool2d(disentangle, disentangle.shape[2:4])
         global_feat = global_feat.view(global_feat.shape[0], -1)  # flatten to (bs, 2048)
         feat = self.bottleneck(global_feat)
 

@@ -59,7 +59,7 @@ def do_train(cfg,
     evaluator = R1_mAP_eval(num_query, max_rank=50, feat_norm=cfg.TEST.FEAT_NORM)
     if "resnet" in cfg.MODEL.NAME:
         model.base._freeze_stages()
-    logger.info('Freezing the stages number:{}'.format(cfg.MODEL.FROZEN))
+        logger.info('Freezing the stages number:{}'.format(cfg.MODEL.FROZEN))
     # train
     l1loss = torch.nn.L1Loss()
     for epoch in range(1, epochs + 1):
@@ -73,9 +73,7 @@ def do_train(cfg,
         taker.train()
         cutter.train()
         decoder.train()
-        print("Epoch: ", epoch)
         for n_iter, (img, vid, camid, trackid) in enumerate(train_loader):
-            print("Iter: ", n_iter)
             model_optimizer.zero_grad()
             optimizer_center.zero_grad()
             img = img.to(device)
@@ -85,13 +83,11 @@ def do_train(cfg,
             # typeID = trackid[:, 0]
             # colorID = trackid[:, 1]
             score, feat, disentangled_feature_map, proj_feature_map, bg_feature_map = model(img, target, dis=True)
-            print(score.shape, feat.shape)
 
             reid_loss = loss_fn(score, feat, target)
 
             # reconstruct to the same image
             fake_img = decoder(disentangled_feature_map, proj_feature_map, bg_feature_map)
-            print("fake img ", fake_img.shape)
             reconstr_loss = l1loss(fake_img, img)
 
             # train taker to be the same resnet 50
@@ -100,25 +96,23 @@ def do_train(cfg,
 
             # disentangle img loss
             cut = cutter(bg_feature_map)
-            print("cut", cut.shape)
             masked_img1 = img * cut
             masked_img2 = img * (1 - cut)
-            print("masked img", masked_img1.shape)
             _, masked1_score = taker(masked_img1)
             _, masked2_score = taker(masked_img2)
-            print("masked score", masked1_score.shape)
             take_masked_1_loss = F.kl_div(masked1_score, score)
             take_masked_2_loss = F.kl_div(masked2_score, score)
             prob_take_1 = take_masked_2_loss / (take_masked_1_loss + take_masked_2_loss + 0.00001)
             cut_loss = prob_take_1 * torch.sum(cut) + (1 - prob_take_1) * torch.sum(1 - cut)
             take_loss = prob_take_1 * take_masked_1_loss + (1 - prob_take_1) * take_masked_2_loss
 
+            #print("kl loss", take_masked_1_loss.item(), take_masked_2_loss.item(), taker_reid_loss.item())
             # TODO step
-            reid_loss.backward(retain_graph=True)
-            reconstr_loss.backward(retain_graph=True)
-            cut_loss.backward(retain_graph=True)
-            take_loss.backward(retain_graph=True)
-            taker_reid_loss.backward()
+            reid_loss.backward()
+            #reconstr_loss.backward(retain_graph=True)
+            #cut_loss.backward(retain_graph=True)
+            #take_loss.backward(retain_graph=True)
+            #taker_reid_loss.backward()
 
             model_optimizer.step()
             decoder_optimizer.step()
