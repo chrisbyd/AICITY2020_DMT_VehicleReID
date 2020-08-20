@@ -57,7 +57,8 @@ def do_train(cfg,
     acc_meter = AverageMeter()
 
     evaluator = R1_mAP_eval(num_query, max_rank=50, feat_norm=cfg.TEST.FEAT_NORM)
-    model.base._freeze_stages()
+    if "resnet" in cfg.MODEL.NAME:
+        model.base._freeze_stages()
     logger.info('Freezing the stages number:{}'.format(cfg.MODEL.FROZEN))
     # train
     l1loss = torch.nn.L1Loss()
@@ -69,6 +70,9 @@ def do_train(cfg,
         take_reid_meter.reset()
         scheduler.step()
         model.train()
+        taker.train()
+        cutter.train()
+        decoder.train()
         print("Epoch: ", epoch)
         for n_iter, (img, vid, camid, trackid) in enumerate(train_loader):
             print("Iter: ", n_iter)
@@ -96,6 +100,7 @@ def do_train(cfg,
 
             # disentangle img loss
             cut = cutter(bg_feature_map)
+            print("cut", cut.shape)
             masked_img1 = img * cut
             masked_img2 = img * (1 - cut)
             print("masked img", masked_img1.shape)
@@ -110,9 +115,9 @@ def do_train(cfg,
 
             # TODO step
             reid_loss.backward(retain_graph=True)
-            reconstr_loss.backward()
-            cut_loss.backward()
-            take_loss.backward()
+            reconstr_loss.backward(retain_graph=True)
+            cut_loss.backward(retain_graph=True)
+            take_loss.backward(retain_graph=True)
             taker_reid_loss.backward()
 
             model_optimizer.step()

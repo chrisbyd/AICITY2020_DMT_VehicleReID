@@ -6,6 +6,7 @@ from .backbones.resnet_ibn_a import resnet50_ibn_a,resnet101_ibn_a
 from .backbones.se_resnet_ibn_a import se_resnet101_ibn_a
 import torch.nn.functional as F
 from torch.hub import load_state_dict_from_url
+import torchvision.models as models
 BG_DIM = 16
 model_urls = {
     'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
@@ -128,14 +129,22 @@ class ResBlocks(nn.Module):
 
 
 class ImgDecoder(nn.Module):
-    def __init__(self, cfg, feature_size=2048, bg_dim=BG_DIM):
+    def __init__(self, cfg,  bg_dim=BG_DIM):
         super(ImgDecoder, self).__init__()
         self.decoder_layer = []
-        dim = feature_size + bg_dim
-        self.decoder_layer += [ResBlocks(1, dim, "bn", "relu", pad_type="reflect"), nn.Upsample(scale_factor=4),
-                               Conv2dBlock(dim, 32, 5, 1, 2, norm='bn', activation="relu", pad_type="reflect"),
+        if "densenet" in cfg.MODEL.NAME:
+            feature_size = 1024
+        else:
+            feature_size = 2048
+        begin_dim = feature_size + bg_dim
+        dim = 32
+        self.decoder_layer += [ResBlocks(1, begin_dim, "bn", "relu", pad_type="reflect"),
                                nn.Upsample(scale_factor=4),
-                               Conv2dBlock(32, 3, 5, 1, 2, norm='none', activation="tanh", pad_type="reflect")
+                               Conv2dBlock(begin_dim, dim, 5, 1, 2, norm='bn', activation="relu", pad_type="reflect"),
+                               nn.Upsample(scale_factor=4),
+                               Conv2dBlock(dim, 2*dim, 5, 1, 2, norm='bn', activation="relu", pad_type="reflect"),
+                               nn.Upsample(scale_factor=2),
+                               Conv2dBlock(2*dim, 3, 5, 1, 2, norm='none', activation="tanh", pad_type="reflect"),
                                ]
         self.decoder_layer = nn.Sequential(*self.decoder_layer)
 
@@ -154,16 +163,20 @@ class ImgDecoder(nn.Module):
 class CutterNet(nn.Module):
     def __init__(self, cfg):
         super(CutterNet, self).__init__()
-        dim = BG_DIM
-        self.mask_layer = [ResBlocks(1, BG_DIM, "bn", "relu", pad_type="reflect"), nn.Upsample(scale_factor=4),
-                               Conv2dBlock(dim, 8, 5, 1, 2, norm='bn', activation="relu", pad_type="reflect"),
+        dim = 32
+        self.mask_layer = [ResBlocks(1, BG_DIM, "bn", "relu", pad_type="reflect"),
                                nn.Upsample(scale_factor=4),
-                               Conv2dBlock(8, 1, 5, 1, 2, norm='none', activation="tanh", pad_type="reflect")
+                               Conv2dBlock(BG_DIM, dim, 5, 1, 2, norm='bn', activation="relu", pad_type="reflect"),
+                               nn.Upsample(scale_factor=4),
+                               Conv2dBlock(dim, 2*dim, 5, 1, 2, norm='bn', activation="relu", pad_type="reflect"),
+                               nn.Upsample(scale_factor=2),
+                               Conv2dBlock(2*dim, 1, 5, 1, 2, norm='none', activation="tanh", pad_type="reflect"),
                                ]
         self.mask_layer = nn.Sequential(*self.mask_layer)
 
     def forward(self, bg_feature):
-        cut = (self.mask_layer(bg_feature) + 1) / 2
+        x = self.mask_layer(bg_feature)
+        cut = (x + 1) / 2
         cut = cut.repeat(1, 3, 1, 1)
         return cut
 
@@ -191,7 +204,6 @@ class TakerNet(nn.Module):
         student_code = nn.functional.avg_pool2d(student_code, student_code.shape[2:4])
         student_code = student_code.view(student_code.shape[0], -1)
         predict = self.classifier(student_code)
-        print("taker code", student_code.shape, predict.shape)
 
         return student_code, predict
 
@@ -212,6 +224,10 @@ class Backbone(nn.Module):
                                block=Bottleneck, frozen_stages=cfg.MODEL.FROZEN,
                                layers=[3, 4, 6, 3])
             print('using resnet50 as a backbone')
+        elif model_name == "densenet":
+            self.in_planes = 1024
+            self.base = models.densenet121(pretrained=True)
+            self.base = torch.nn.Sequential(*(list(self.base.children())[:-1]))
         elif model_name == 'resnet50_ibn_a':
             self.in_planes = 2048
             self.base = resnet50_ibn_a(last_stride)
@@ -313,6 +329,8 @@ class Backbone(nn.Module):
         for i in param_dict:
             self.state_dict()[i].copy_(param_dict[i])
         print('Loading pretrained model for finetuning from {}'.format(model_path))
+
+
 
 def make_model(cfg, num_class):
     model = Backbone(num_class, cfg)
