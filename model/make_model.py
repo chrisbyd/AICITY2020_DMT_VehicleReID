@@ -151,9 +151,9 @@ class ImgDecoder(nn.Module):
         return img
 
 
-class BgMaskNet(nn.Module):
+class CutterNet(nn.Module):
     def __init__(self, cfg):
-        super(BgMaskNet, self).__init__()
+        super(CutterNet, self).__init__()
         dim = BG_DIM
         self.mask_layer = [ResBlocks(1, BG_DIM, "bn", "relu", pad_type="reflect"), nn.Upsample(scale_factor=4),
                                Conv2dBlock(dim, 8, 5, 1, 2, norm='bn', activation="relu", pad_type="reflect"),
@@ -163,33 +163,37 @@ class BgMaskNet(nn.Module):
         self.mask_layer = nn.Sequential(*self.mask_layer)
 
     def forward(self, bg_feature):
-        mask = (self.mask_layer(bg_feature) + 1) / 2
-        mask = mask.repeat(1, 3, 1, 1)
-        return mask
+        cut = (self.mask_layer(bg_feature) + 1) / 2
+        cut = cut.repeat(1, 3, 1, 1)
+        return cut
 
-# class TakerNet(nn.Module):
-#     def __init__(self, cfg):
-#         super(TakerNet, self).__init__()
-#         self.model = []
-#         dim = 32
-#         norm = "bn"
-#         activ = "relu"
-#         pad_type = "reflect"
-#         self.model += [Conv2dBlock(3, dim, 7, 1, 3, norm=norm, activation=activ, pad_type=pad_type)]
-#         for i in range(2):
-#             self.model += [Conv2dBlock(dim, 2 * dim, 4, 2, 1, norm=norm, activation=activ, pad_type=pad_type)]
-#             dim *= 2
-#         for i in range(3 - 2):
-#             self.model += [Conv2dBlock(dim, dim, 4, 2, 1, norm=norm, activation=activ, pad_type=pad_type)]
-#         self.model += [nn.AdaptiveAvgPool2d(4)]  # global average pooling
-#         self.model += [nn.Conv2d(dim, style_dim, 1, 1, 0)]
-#         self.model = nn.Sequential(*self.model)
-#         self.output_dim = dim
-#
-#         self.classifier = nn.Linear(style_dim, 395)
-#
-#     def forward(self):
-#         pass
+class TakerNet(nn.Module):
+    def __init__(self, cfg, clss_num):
+        super(TakerNet, self).__init__()
+        self.model = []
+        dim = 8
+        norm = "bn"
+        activ = "relu"
+        pad_type = "reflect"
+        style_dim = 64
+        self.model += [Conv2dBlock(3, dim, 7, 1, 3, norm=norm, activation=activ, pad_type=pad_type)]
+        for i in range(2):
+            self.model += [Conv2dBlock(dim, 2 * dim, 4, 2, 1, norm=norm, activation=activ, pad_type=pad_type)]
+            dim *= 2
+        self.model += [nn.AdaptiveAvgPool2d(4)]  # global average pooling
+        self.model += [nn.Conv2d(dim, style_dim, 1, 1, 0)]
+        self.model = nn.Sequential(*self.model)
+
+        self.classifier = nn.Linear(style_dim, clss_num)
+
+    def forward(self, x):
+        student_code = self.model(x)
+        student_code = nn.functional.avg_pool2d(student_code, student_code.shape[2:4])
+        student_code = student_code.view(student_code.shape[0], -1)
+        predict = self.classifier(student_code)
+        print("taker code", student_code.shape, predict.shape)
+
+        return student_code, predict
 
 class Backbone(nn.Module):
     def __init__(self, num_classes, cfg, bg_dim=BG_DIM):
@@ -312,6 +316,7 @@ class Backbone(nn.Module):
 
 def make_model(cfg, num_class):
     model = Backbone(num_class, cfg)
-    bgmask = BgMaskNet(cfg)
+    cutter = CutterNet(cfg)
+    taker = TakerNet(cfg, num_class)
     imgdecoder = ImgDecoder(cfg)
-    return model, imgdecoder, bgmask
+    return model, imgdecoder, cutter, taker

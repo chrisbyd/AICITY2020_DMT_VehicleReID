@@ -54,43 +54,50 @@ if __name__ == '__main__':
     train_loader, val_loader, num_query, num_classes = make_dataloader(cfg)
 
     if cfg.MODEL.PRETRAIN_CHOICE == 'finetune':
-        model, imgdecoder, bgmask = make_model(cfg, num_class=433)
+        model, imgdecoder, cutter, taker = make_model(cfg, num_class=433)
         model.load_param_finetune(cfg.MODEL.PRETRAIN_PATH)
         print('Loading pretrained model for finetuning......')
     else:
-        model, imgdecoder, bgmask = make_model(cfg, num_class=num_classes)
+        model, imgdecoder, cutter, taker = make_model(cfg, num_class=num_classes)
 
     loss_func, center_criterion = make_loss(cfg, num_classes=num_classes)
 
     model_optimizer, optimizer_center = make_optimizer(cfg, model, center_criterion)
     decoder_optimizer, _ = make_optimizer(cfg, imgdecoder, center_criterion)
-    bgmask_optimizer, _ = make_optimizer(cfg, bgmask, center_criterion)
+    cutter_optimizer, _ = make_optimizer(cfg, cutter, center_criterion)
+    taker_optimizer, _ = make_optimizer(cfg, taker, center_criterion)
     model_scheduler = WarmupMultiStepLR(model_optimizer, cfg.SOLVER.STEPS, cfg.SOLVER.GAMMA,
                                         cfg.SOLVER.WARMUP_FACTOR,
                                         cfg.SOLVER.WARMUP_EPOCHS, cfg.SOLVER.WARMUP_METHOD)
     decoder_scheduler = WarmupMultiStepLR(decoder_optimizer, cfg.SOLVER.STEPS, cfg.SOLVER.GAMMA,
                                         cfg.SOLVER.WARMUP_FACTOR,
                                         cfg.SOLVER.WARMUP_EPOCHS, cfg.SOLVER.WARMUP_METHOD)
-    mask_scheduler = WarmupMultiStepLR(bgmask_optimizer, cfg.SOLVER.STEPS, cfg.SOLVER.GAMMA,
-                                        cfg.SOLVER.WARMUP_FACTOR,
-                                        cfg.SOLVER.WARMUP_EPOCHS, cfg.SOLVER.WARMUP_METHOD)
+    cutter_scheduler = WarmupMultiStepLR(cutter_optimizer, cfg.SOLVER.STEPS, cfg.SOLVER.GAMMA,
+                                         cfg.SOLVER.WARMUP_FACTOR,
+                                         cfg.SOLVER.WARMUP_EPOCHS, cfg.SOLVER.WARMUP_METHOD)
+    taker_scheduler = WarmupMultiStepLR(taker_optimizer, cfg.SOLVER.STEPS, cfg.SOLVER.GAMMA,
+                                         cfg.SOLVER.WARMUP_FACTOR,
+                                         cfg.SOLVER.WARMUP_EPOCHS, cfg.SOLVER.WARMUP_METHOD)
 
 
     do_train(
         cfg,
         model,
         imgdecoder,
-        bgmask,
+        cutter,
+        taker,
         center_criterion,
         train_loader,
         val_loader,
         model_optimizer,
         decoder_optimizer,
-        mask_scheduler,
+        cutter_optimizer,
+        taker_optimizer,
         optimizer_center,
         model_scheduler,  # modify for using self trained model
         decoder_scheduler,
-        mask_scheduler,
+        cutter_scheduler,
+        taker_scheduler,
         loss_func,
         num_query
     )
