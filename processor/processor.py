@@ -131,10 +131,10 @@ def do_train(cfg,
 
             acc = (score.max(1)[1] == target).float().mean()
             reid_loss_meter.update(reid_loss.item(), img.shape[0])
-            reconstr_loss_meter.update(reconstr_loss.item(), reconstr_loss.shape[0])
-            cut_loss_meter.update(cut_loss.item(), cut_loss.shape[0])
-            take_loss_meter.update(take_loss.item(), take_loss.shape[0])
-            take_reid_meter.update(taker_reid_loss.item(), taker_reid_loss.shape[0])
+            reconstr_loss_meter.update(reconstr_loss.item(), img.shape[0])
+            cut_loss_meter.update(cut_loss.item(), img.shape[0])
+            take_loss_meter.update(take_loss.item(), img.shape[0])
+            take_reid_meter.update(taker_reid_loss.item(), img.shape[0])
             acc_meter.update(acc, 1)
 
             if (n_iter + 1) % log_period == 0:
