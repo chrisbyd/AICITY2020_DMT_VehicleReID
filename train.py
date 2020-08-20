@@ -54,29 +54,43 @@ if __name__ == '__main__':
     train_loader, val_loader, num_query, num_classes = make_dataloader(cfg)
 
     if cfg.MODEL.PRETRAIN_CHOICE == 'finetune':
-        model = make_model(cfg, num_class=433)
+        model, imgdecoder, bgmask = make_model(cfg, num_class=433)
         model.load_param_finetune(cfg.MODEL.PRETRAIN_PATH)
         print('Loading pretrained model for finetuning......')
     else:
-        model = make_model(cfg, num_class=num_classes)
+        model, imgdecoder, bgmask = make_model(cfg, num_class=num_classes)
 
     loss_func, center_criterion = make_loss(cfg, num_classes=num_classes)
 
-    optimizer, optimizer_center = make_optimizer(cfg, model, center_criterion)
-    scheduler = WarmupMultiStepLR(optimizer, cfg.SOLVER.STEPS, cfg.SOLVER.GAMMA,
-                                  cfg.SOLVER.WARMUP_FACTOR,
-                                  cfg.SOLVER.WARMUP_EPOCHS, cfg.SOLVER.WARMUP_METHOD)
+    model_optimizer, optimizer_center = make_optimizer(cfg, model, center_criterion)
+    decoder_optimizer, _ = make_optimizer(cfg, imgdecoder, center_criterion)
+    bgmask_optimizer, _ = make_optimizer(cfg, bgmask, center_criterion)
+    model_scheduler = WarmupMultiStepLR(model_optimizer, cfg.SOLVER.STEPS, cfg.SOLVER.GAMMA,
+                                        cfg.SOLVER.WARMUP_FACTOR,
+                                        cfg.SOLVER.WARMUP_EPOCHS, cfg.SOLVER.WARMUP_METHOD)
+    decoder_scheduler = WarmupMultiStepLR(decoder_optimizer, cfg.SOLVER.STEPS, cfg.SOLVER.GAMMA,
+                                        cfg.SOLVER.WARMUP_FACTOR,
+                                        cfg.SOLVER.WARMUP_EPOCHS, cfg.SOLVER.WARMUP_METHOD)
+    mask_scheduler = WarmupMultiStepLR(bgmask_optimizer, cfg.SOLVER.STEPS, cfg.SOLVER.GAMMA,
+                                        cfg.SOLVER.WARMUP_FACTOR,
+                                        cfg.SOLVER.WARMUP_EPOCHS, cfg.SOLVER.WARMUP_METHOD)
 
 
     do_train(
         cfg,
         model,
+        imgdecoder,
+        bgmask,
         center_criterion,
         train_loader,
         val_loader,
-        optimizer,
+        model_optimizer,
+        decoder_optimizer,
+        mask_scheduler,
         optimizer_center,
-        scheduler,  # modify for using self trained model
+        model_scheduler,  # modify for using self trained model
+        decoder_scheduler,
+        mask_scheduler,
         loss_func,
         num_query
     )

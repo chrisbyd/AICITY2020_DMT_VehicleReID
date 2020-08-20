@@ -38,8 +38,8 @@ class Fp16OptimizerHook(OptimizerHook):
 
     def before_run(self, runner):
         # keep a copy of fp32 weights
-        runner.optimizer.param_groups = copy.deepcopy(
-            runner.optimizer.param_groups)
+        runner.model_optimizer.param_groups = copy.deepcopy(
+            runner.model_optimizer.param_groups)
         # convert model to fp16
         wrap_fp16_model(runner.model)
 
@@ -59,13 +59,13 @@ class Fp16OptimizerHook(OptimizerHook):
     def after_train_iter(self, runner):
         # clear grads of last iteration
         runner.model.zero_grad()
-        runner.optimizer.zero_grad()
+        runner.model_optimizer.zero_grad()
         # scale the loss value
         scaled_loss = runner.outputs['loss'] * self.loss_scale
         scaled_loss.backward()
         # copy fp16 grads in the model to fp32 params in the optimizer
         fp32_weights = []
-        for param_group in runner.optimizer.param_groups:
+        for param_group in runner.model_optimizer.param_groups:
             fp32_weights += param_group['params']
         self.copy_grads_to_fp32(runner.model, fp32_weights)
         # allreduce grads
@@ -78,7 +78,7 @@ class Fp16OptimizerHook(OptimizerHook):
         if self.grad_clip is not None:
             self.clip_grads(fp32_weights)
         # update fp32 params
-        runner.optimizer.step()
+        runner.model_optimizer.step()
         # copy fp32 params to the fp16 model
         self.copy_params_to_fp16(runner.model, fp32_weights)
 

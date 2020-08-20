@@ -7,20 +7,29 @@ import torch.nn as nn
 import cv2
 from utils.meter import AverageMeter
 from utils.metrics import R1_mAP,R1_mAP_eval,R1_mAP_Pseudo,R1_mAP_query_mining
+import torch.nn.functional as F
+from tools.visualize import visualize
 
 def do_train(cfg,
              model,
+             decoder,
+             mask,
              center_criterion,
              train_loader,
              val_loader,
-             optimizer,
+             model_optimizer,
+             decoder_optimizer,
+             mask_optimizer,
              optimizer_center,
              scheduler,
+             decoder_scheduler,
+             mask_scheduler,
              loss_fn,
              num_query):
     log_period = cfg.SOLVER.LOG_PERIOD
     checkpoint_period = cfg.SOLVER.CHECKPOINT_PERIOD
     eval_period = cfg.SOLVER.EVAL_PERIOD
+
 
     device = "cuda"
     epochs = cfg.SOLVER.MAX_EPOCHS
@@ -33,8 +42,13 @@ def do_train(cfg,
             print('Using {} GPUs for training'.format(torch.cuda.device_count()))
             model = nn.DataParallel(model)
         model.to(device)
+        decoder.to(device)
+        mask.to(device)
 
-    loss_meter = AverageMeter()
+    reid_loss_meter = AverageMeter()
+    reconstr_loss_meter = AverageMeter()
+    cut_loss_meter = AverageMeter()
+    take_loss_meter = AverageMeter()
     acc_meter = AverageMeter()
 
     evaluator = R1_mAP_eval(num_query, max_rank=50, feat_norm=cfg.TEST.FEAT_NORM)
@@ -44,42 +58,74 @@ def do_train(cfg,
     l1loss = torch.nn.L1Loss()
     for epoch in range(1, epochs + 1):
         start_time = time.time()
-        loss_meter.reset()
+        reid_loss_meter.reset()
         acc_meter.reset()
         evaluator.reset()
         scheduler.step()
         model.train()
+        print("Epoch: ", epoch)
         for n_iter, (img, vid, camid, trackid) in enumerate(train_loader):
-
-            optimizer.zero_grad()
+            print("Iter: ", n_iter)
+            model_optimizer.zero_grad()
             optimizer_center.zero_grad()
             img = img.to(device)
             target = vid.to(device)
-            camid = camid.to(device)
-            trackid = trackid.to(device)
-            typeID = trackid[:, 0]
-            colorID = trackid[:, 1]
-            score, feat, proj_feature_map, bg_feature_map, reconst_img = model(img, target, dis=True)
-            loss = loss_fn(score, feat, target)
-            reconstr_loss = l1loss(reconst_img, img)
+            # camid = camid.to(device)
+            # trackid = trackid.to(device)
+            # typeID = trackid[:, 0]
+            # colorID = trackid[:, 1]
+            score, feat, disentangled_feature_map, proj_feature_map, bg_feature_map = model(img, target, dis=True)
+            print(score.shape, feat.shape)
+
+            reid_loss = loss_fn(score, feat, target)
+            reid_loss.backward(retain_graph=True)
+
+            # reconstruct to the same image
+            fake_img = decoder(disentangled_feature_map, proj_feature_map, bg_feature_map)
+            print("fake img ", fake_img.shape)
+            reconstr_loss = l1loss(fake_img, img)
+
+            # disentangle img loss
+            mask_shape = mask(bg_feature_map)
+            masked_img1 = img * mask_shape
+            masked_img2 = img * (1 - mask_shape)
+            print("masked img", masked_img1.shape)
+            masked1_score, _ = model(masked_img1.detach(), target, dis=False)
+            masked2_score, _ = model(masked_img2.detach(), target, dis=False)
+            print("masked score", masked1_score.shape)
+            take_masked_1_loss = F.kl_div(masked1_score, score)
+            take_masked_2_loss = F.kl_div(masked2_score, score)
+            prob_take_1 = take_masked_2_loss / (take_masked_1_loss + take_masked_2_loss + 0.00001)
+            cut_loss = prob_take_1 * torch.sum(mask_shape) + (1 - prob_take_1) * torch.sum(1 - mask_shape)
+            take_loss = prob_take_1 * take_masked_1_loss + (1 - prob_take_1) * take_masked_2_loss
 
             # TODO step
-            loss.backward(retain_graph=True)
+            reid_loss.backward(retain_graph=True)
             reconstr_loss.backward()
-            optimizer.step()
+            cut_loss.backward()
+            take_loss.backward()
+
+            model_optimizer.step()
+            decoder_optimizer.step()
+            mask_optimizer.step()
             if 'center' in cfg.MODEL.METRIC_LOSS_TYPE:
                 for param in center_criterion.parameters():
                     param.grad.data *= (1. / cfg.SOLVER.CENTER_LOSS_WEIGHT)
                 optimizer_center.step()
 
             acc = (score.max(1)[1] == target).float().mean()
-            loss_meter.update(loss.item(), img.shape[0])
+            reid_loss_meter.update(reid_loss.item(), img.shape[0])
+            reconstr_loss_meter.update(reconstr_loss.item(), reconstr_loss.shape[0])
+            cut_loss_meter.update(cut_loss.item(), cut_loss.shape[0])
+            take_loss_meter.update(take_loss.item(), take_loss.shape[0])
             acc_meter.update(acc, 1)
 
             if (n_iter + 1) % log_period == 0:
-                logger.info("Epoch[{}] Iteration[{}/{}] Loss: {:.3f}, Acc: {:.3f}, Base Lr: {:.2e}"
+                logger.info("Epoch[{}] Iteration[{}/{}] Loss: {:.3f}, Acc: {:.3f}, Reconstr: {:.3f}, Cut: {:.3f}, Take: {:.3f}, Base Lr: {:.2e}"
                             .format(epoch, (n_iter + 1), len(train_loader),
-                                    loss_meter.avg, acc_meter.avg, scheduler.get_lr()[0]))
+                                    reid_loss_meter.avg, acc_meter.avg, reconstr_loss_meter.avg, cut_loss_meter.avg, take_loss_meter.avg,
+                                    scheduler.get_lr()[0]))
+                visualize(cfg.OUTPUT_DIR, img, fake_img, masked_img1, epoch, n_iter)
 
         end_time = time.time()
         time_per_batch = (end_time - start_time) / (n_iter + 1)
@@ -102,6 +148,10 @@ def do_train(cfg,
             logger.info("mAP: {:.1%}".format(mAP))
             for r in [1, 5, 10]:
                 logger.info("CMC curve, Rank-{:<3}:{:.1%}".format(r, cmc[r - 1]))
+
+def train_reid(n_iter, img, vid, camid, trackid, model, model_optimizer):
+    model_optimizer.zero_grad()
+    score, feat, disentangled_feature_map, proj_feature_map, bg_feature_map = model(img, target, dis=True)
 
 def do_inference(cfg,
                  model,

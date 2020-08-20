@@ -215,7 +215,7 @@ def _dist_train(model,
         broadcast_buffers=False)
 
     # build runner
-    optimizer = build_optimizer(model, cfg.optimizer)
+    optimizer = build_optimizer(model, cfg.model_optimizer)
     runner = Runner(
         model,
         batch_processor,
@@ -278,7 +278,7 @@ def _non_dist_train(model,
     model = MMDataParallel(model, device_ids=range(cfg.gpus)).cuda()
 
     # build runner
-    optimizer = build_optimizer(model, cfg.optimizer)
+    optimizer = build_optimizer(model, cfg.model_optimizer)
     runner = Runner(
         model,
         batch_processor,

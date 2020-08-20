@@ -6,7 +6,7 @@ from .backbones.resnet_ibn_a import resnet50_ibn_a,resnet101_ibn_a
 from .backbones.se_resnet_ibn_a import se_resnet101_ibn_a
 import torch.nn.functional as F
 from torch.hub import load_state_dict_from_url
-
+BG_DIM = 16
 model_urls = {
     'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
     'resnet34': 'https://download.pytorch.org/models/resnet34-333f7ec4.pth',
@@ -127,8 +127,72 @@ class ResBlocks(nn.Module):
         return self.model(x)
 
 
+class ImgDecoder(nn.Module):
+    def __init__(self, cfg, feature_size=2048, bg_dim=BG_DIM):
+        super(ImgDecoder, self).__init__()
+        self.decoder_layer = []
+        dim = feature_size + bg_dim
+        self.decoder_layer += [ResBlocks(1, dim, "bn", "relu", pad_type="reflect"), nn.Upsample(scale_factor=4),
+                               Conv2dBlock(dim, 32, 5, 1, 2, norm='bn', activation="relu", pad_type="reflect"),
+                               nn.Upsample(scale_factor=4),
+                               Conv2dBlock(32, 3, 5, 1, 2, norm='none', activation="tanh", pad_type="reflect")
+                               ]
+        self.decoder_layer = nn.Sequential(*self.decoder_layer)
+
+    def forward(self, disentangled_feature_map, project_feature, bg_feature):
+        assert len(project_feature.shape) == 2
+        assert disentangled_feature_map.shape[0] == project_feature.shape[0]
+        assert disentangled_feature_map.shape[0] == bg_feature.shape[0]
+        projected_feature = disentangled_feature_map * project_feature[:, :, None, None]
+        img_feature = torch.cat([projected_feature, bg_feature], dim=1)
+
+        img = self.decoder_layer(img_feature)
+
+        return img
+
+
+class BgMaskNet(nn.Module):
+    def __init__(self, cfg):
+        super(BgMaskNet, self).__init__()
+        dim = BG_DIM
+        self.mask_layer = [ResBlocks(1, BG_DIM, "bn", "relu", pad_type="reflect"), nn.Upsample(scale_factor=4),
+                               Conv2dBlock(dim, 8, 5, 1, 2, norm='bn', activation="relu", pad_type="reflect"),
+                               nn.Upsample(scale_factor=4),
+                               Conv2dBlock(8, 1, 5, 1, 2, norm='none', activation="tanh", pad_type="reflect")
+                               ]
+        self.mask_layer = nn.Sequential(*self.mask_layer)
+
+    def forward(self, bg_feature):
+        mask = (self.mask_layer(bg_feature) + 1) / 2
+        mask = mask.repeat(1, 3, 1, 1)
+        return mask
+
+# class TakerNet(nn.Module):
+#     def __init__(self, cfg):
+#         super(TakerNet, self).__init__()
+#         self.model = []
+#         dim = 32
+#         norm = "bn"
+#         activ = "relu"
+#         pad_type = "reflect"
+#         self.model += [Conv2dBlock(3, dim, 7, 1, 3, norm=norm, activation=activ, pad_type=pad_type)]
+#         for i in range(2):
+#             self.model += [Conv2dBlock(dim, 2 * dim, 4, 2, 1, norm=norm, activation=activ, pad_type=pad_type)]
+#             dim *= 2
+#         for i in range(3 - 2):
+#             self.model += [Conv2dBlock(dim, dim, 4, 2, 1, norm=norm, activation=activ, pad_type=pad_type)]
+#         self.model += [nn.AdaptiveAvgPool2d(4)]  # global average pooling
+#         self.model += [nn.Conv2d(dim, style_dim, 1, 1, 0)]
+#         self.model = nn.Sequential(*self.model)
+#         self.output_dim = dim
+#
+#         self.classifier = nn.Linear(style_dim, 395)
+#
+#     def forward(self):
+#         pass
+
 class Backbone(nn.Module):
-    def __init__(self, num_classes, cfg):
+    def __init__(self, num_classes, cfg, bg_dim=BG_DIM):
         super(Backbone, self).__init__()
         last_stride = cfg.MODEL.LAST_STRIDE
         model_path = cfg.MODEL.PRETRAIN_PATH
@@ -137,8 +201,6 @@ class Backbone(nn.Module):
         self.cos_layer = cfg.MODEL.COS_LAYER
         self.neck = cfg.MODEL.NECK
         self.neck_feat = cfg.TEST.NECK_FEAT
-        self.proj_feature_dim = 4
-        self.bg_feature_dim = 3
 
         if model_name == 'resnet50':
             self.in_planes = 2048
@@ -182,57 +244,27 @@ class Backbone(nn.Module):
             self.classifier.apply(weights_init_classifier)
 
         # disentangle branch
-        self.proj_layer = []
-        for _ in range(self.proj_feature_dim):
-            m = nn.Sequential(nn.Conv2d(self.in_planes, self.in_planes, kernel_size=5, stride=2), nn.ReLU(), nn.Conv2d(self.in_planes,self.in_planes, kernel_size=3, stride=2))
-            m.apply(weights_init_kaiming)
-            self.proj_layer.append(m)
-        self.proj_layer = nn.ModuleList(self.proj_layer)
+        self.proj_layer = nn.Sequential(nn.Conv2d(self.in_planes, self.in_planes, kernel_size=5, stride=2), nn.ReLU(), nn.Conv2d(self.in_planes,self.in_planes, kernel_size=3, stride=2), nn.Tanh())
+        self.proj_layer.apply(weights_init_kaiming)
 
         self.feature_layer = nn.Sequential(nn.Conv2d(self.in_planes, self.in_planes, kernel_size=3, stride=1, padding=1, padding_mode="reflect"), nn.ReLU(), nn.Conv2d(self.in_planes, self.in_planes, kernel_size=3, stride=1, padding=1))
         self.feature_layer.apply(weights_init_kaiming)
 
-        self.decoder_layer = []
-        dim = self.proj_feature_dim + self.bg_feature_dim
-        self.decoder_layer += [ResBlocks(1, dim, "bn", "relu", pad_type="reflect"), nn.Upsample(scale_factor=4),
-                               Conv2dBlock(dim, 32, 5, 1, 2, norm='bn', activation="relu", pad_type="reflect"),
-                               nn.Upsample(scale_factor=4),
-                               Conv2dBlock(32, 3, 5, 1, 2, norm='none', activation="tanh", pad_type="reflect")
-                               ]
-        self.decoder_layer = nn.Sequential(*self.decoder_layer)
+        self.bg_layer = nn.Sequential(nn.Conv2d(self.in_planes, self.in_planes//16, kernel_size=3, stride=1, padding=1, padding_mode="reflect"), nn.ReLU(), nn.Conv2d(self.in_planes//16, bg_dim, kernel_size=3, stride=1, padding=1))
 
-        self.bg_layer = nn.Conv2d(self.in_planes, self.bg_feature_dim, kernel_size=3, stride=1, padding=1)
         self.bottleneck = nn.BatchNorm1d(self.in_planes)
         self.bottleneck.bias.requires_grad_(False)
         self.bottleneck.apply(weights_init_kaiming)
 
-    def proj(self, x, w):
-        w = torch.unsqueeze(w, 1)
-        batch_size = x.shape[0]
-        in_channels = self.in_planes
-        out_channels = 1
-        o = torch.nn.functional.conv2d(
-            x.view(1, batch_size * in_channels, x.size(2), x.size(3)),
-            w.view(batch_size * out_channels, in_channels, w.size(3), w.size(4)),
-            padding=1,
-            groups=batch_size)
-        o = o.view(batch_size, out_channels, o.size(2), o.size(3))
-        return o
 
     def forward(self, x, label=None, dis=False):  # label is unused if self.cos_layer == 'no'
-        print("img size", x.shape)
         x = self.base(x)
         disentangle = self.feature_layer(x)
-        proj_feature_map = None
-        for i in range(self.proj_feature_dim):
-            kernel = self.proj_layer[i](x)
-            proj = self.proj(disentangle, kernel)
-            if proj_feature_map is None:
-                proj_feature_map = proj
-            else:
-                proj_feature_map = torch.cat([proj_feature_map, proj], dim=1)
+        proj_feature_map = self.proj_layer(x)
+        proj_feature_map = nn.functional.avg_pool2d(proj_feature_map, proj_feature_map.shape[2:4])
+        proj_feature_map = proj_feature_map.view(proj_feature_map.shape[0], -1)
+
         bg_feature_map = self.bg_layer(x)
-        reconst_img = self.decoder_layer(torch.cat([proj_feature_map, bg_feature_map],dim=1))
 
         global_feat = nn.functional.avg_pool2d(x, x.shape[2:4])
         global_feat = global_feat.view(global_feat.shape[0], -1)  # flatten to (bs, 2048)
@@ -255,7 +287,7 @@ class Backbone(nn.Module):
                     cls_score = self.arcface(feat, label)
                 else:
                     cls_score = self.classifier(feat)
-                return cls_score, global_feat, proj_feature_map, bg_feature_map, reconst_img   # global feature for triplet loss
+                return cls_score, global_feat, disentangle, proj_feature_map, bg_feature_map   # global feature for triplet loss
         else:
             if self.neck_feat == 'after':
                 # print("Test with feature after BN")
@@ -280,4 +312,6 @@ class Backbone(nn.Module):
 
 def make_model(cfg, num_class):
     model = Backbone(num_class, cfg)
-    return model
+    bgmask = BgMaskNet(cfg)
+    imgdecoder = ImgDecoder(cfg)
+    return model, imgdecoder, bgmask
